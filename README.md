@@ -98,6 +98,13 @@ The integration gateway provides a set of API endpoints for interacting with the
 *   `/api/integrations/products/sync`: Synchronize products from all platforms.
 *   `/api/integrations/b2b/companies`: Get a list of B2B companies from Shopify.
 
+### Shopify App Connector Hub
+
+The app now exposes a lightweight Shopify-focused connector hub UI:
+
+*   `/shopify/app`: Embedded Shopify app entry for plugin/connector visibility.
+*   `/integrations/hub`: Authenticated in-app connector hub view.
+
 ### Webhooks
 
 The application exposes webhook endpoints to receive real-time events from the integrated platforms. These endpoints are available under the `/webhooks/` prefix.
