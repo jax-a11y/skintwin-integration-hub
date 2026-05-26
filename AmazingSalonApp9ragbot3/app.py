@@ -1,4 +1,5 @@
 import os
+import json
 from flask import Flask, request, send_file, jsonify
 from flask_login import LoginManager
 from flask_limiter import Limiter
@@ -48,6 +49,34 @@ login_manager.init_app(app)
 csrf.init_app(app)
 login_manager.login_view = 'auth.login'
 
+
+def load_integration_config():
+    """Load integration config from environment and optional config.json."""
+    config = {"platforms": {}}
+
+    shop_name = os.environ.get("SHOPIFY_SHOP_NAME")
+    access_token = os.environ.get("SHOPIFY_ACCESS_TOKEN")
+    if shop_name and access_token:
+        config["platforms"]["shopify"] = {
+            "enabled": True,
+            "shop_name": shop_name,
+            "access_token": access_token,
+            "api_version": os.environ.get("SHOPIFY_API_VERSION", "2026-01"),
+            "webhook_secret": os.environ.get("SHOPIFY_WEBHOOK_SECRET", "")
+        }
+
+    config_path = os.environ.get("INTEGRATION_CONFIG_PATH", "config.json")
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                file_config = json.load(f)
+            if isinstance(file_config, dict):
+                config = file_config
+        except Exception as e:
+            print(f"Warning: failed to load integration config from {config_path}: {e}")
+
+    return config
+
 @login_manager.user_loader
 def load_user(user_id):
     from database_models import User as SQLUser
@@ -80,7 +109,8 @@ with app.app_context():
     db_sql.create_all()
 
     # Import and register blueprints
-    from routes import auth, appointments, clients, pos, staff, reports, inventory, services, booking, analytics, recommendations, smart_booking, portfolio, voice_assistant, chat_assistant, memory_timeline, journey_map, settings, trends, skill_playground
+    from routes import auth, appointments, clients, pos, staff, reports, inventory, services, booking, analytics, recommendations, smart_booking, portfolio, voice_assistant, chat_assistant, memory_timeline, journey_map, settings, trends, skill_playground, integrations_hub
+    from integrations import create_integration_app, register_integration_blueprints
     app.register_blueprint(auth.auth_bp)
     app.register_blueprint(appointments.bp)
     app.register_blueprint(clients.bp)
@@ -99,6 +129,13 @@ with app.app_context():
     app.register_blueprint(memory_timeline.memory_timeline, url_prefix='/memory-timeline')
     app.register_blueprint(journey_map.journey_map, url_prefix='/journey-map')
     app.register_blueprint(settings.bp)
+    app.register_blueprint(integrations_hub.bp)
+
+    # Register unified integrations (gateway + webhooks)
+    integration_config = load_integration_config()
+    gateway, router = create_integration_app(integration_config)
+    register_integration_blueprints(app, gateway, router)
+    app.extensions["integration_gateway"] = gateway
     
     # Register skill playground routes
     skill_playground.register_routes(app)

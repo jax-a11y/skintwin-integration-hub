@@ -88,7 +88,7 @@ class ShopifyB2BConnector(BaseConnector):
         # GraphQL endpoint
         self.graphql_url = f"https://{shop_name}.myshopify.com/admin/api/{self.api_version}/graphql.json"
         
-        logger.info(f"Initialized Shopify B2B connector for store: {shop_name}")
+        logger.info("Initialized Shopify B2B connector")
     
     def authenticate(self) -> bool:
         """

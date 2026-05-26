@@ -72,7 +72,7 @@ class WixBookingsConnector(BaseConnector):
         self.site_id = site_id
         self.account_id = account_id
         
-        logger.info(f"Initialized Wix Bookings connector for site: {site_id}")
+        logger.info("Initialized Wix Bookings connector")
     
     def authenticate(self) -> bool:
         """

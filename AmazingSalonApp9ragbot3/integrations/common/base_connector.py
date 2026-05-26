@@ -53,7 +53,7 @@ class BaseConnector(ABC):
         self._access_token: Optional[str] = None
         self._token_expiry: Optional[datetime] = None
         
-        logger.info(f"Initialized {self.__class__.__name__} connector for {base_url}")
+        logger.info("Initialized %s connector", self.__class__.__name__)
     
     def _create_session(self) -> requests.Session:
         """Create a requests session with retry configuration."""

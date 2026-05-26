@@ -13,3 +13,4 @@ from . import reports
 from . import recommendations
 from . import voice_assistant
 from . import smart_booking
+from . import integrations_hub
