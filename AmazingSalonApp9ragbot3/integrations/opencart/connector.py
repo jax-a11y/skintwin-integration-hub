@@ -89,7 +89,7 @@ class OpenCartConnector(BaseConnector):
         self.api_username = api_username
         self._api_token: Optional[str] = None
         
-        logger.info(f"Initialized OpenCart connector for store: {store_url}")
+        logger.info("Initialized OpenCart connector")
     
     def authenticate(self) -> bool:
         """
