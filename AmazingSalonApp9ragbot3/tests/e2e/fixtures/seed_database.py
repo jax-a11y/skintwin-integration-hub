@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirna
 
 def seed_database():
     """Seed the database with test data."""
-    os.environ.setdefault('DATABASE_URL', 'sqlite:///instance/e2e_test.db')
+    os.environ.setdefault('DATABASE_URL', 'sqlite:///e2e_test.db')
     os.environ.setdefault('FLASK_SECRET_KEY', 'e2e-seed-key')
     
     from flask import Flask
