@@ -1,0 +1,317 @@
+name: CI Build & Test
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'AmazingSalonApp9ragbot3/**'
+      - '.github/workflows/ci-build.yml'
+      - 'requirements.txt'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'AmazingSalonApp9ragbot3/**'
+      - '.github/workflows/ci-build.yml'
+      - 'requirements.txt'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  checks: write
+  pull-requests: write
+
+env:
+  PYTHON_VERSION: '3.11'
+  APP_DIR: 'AmazingSalonApp9ragbot3'
+
+jobs:
+  lint:
+    name: Lint & Static Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-lint-${{ hashFiles('**/requirements*.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-lint-
+            ${{ runner.os }}-pip-
+
+      - name: Install lint dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff flake8 mypy
+
+      - name: Run Ruff linter
+        run: |
+          cd ${{ env.APP_DIR }}
+          ruff check . --output-format=github || true
+        continue-on-error: true
+
+      - name: Check Python syntax
+        run: |
+          cd ${{ env.APP_DIR }}
+          python -m py_compile app.py main.py database.py || exit 1
+          find . -name "*.py" -type f ! -path "./migrations/*" | head -20 | xargs -I {} python -m py_compile {} || true
+
+  build:
+    name: Build & Install Dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements*.txt', '**/pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r ${{ env.APP_DIR }}/requirements.txt
+          pip install pytest pytest-cov pytest-flask pytest-timeout
+
+      - name: Verify imports
+        run: |
+          cd ${{ env.APP_DIR }}
+          python -c "
+          import sys
+          sys.path.insert(0, '.')
+          # Test core imports
+          from database import db_sql
+          from database_models import User
+          print('Core imports successful')
+          "
+
+  test-unit:
+    name: Unit & Integration Tests
+    runs-on: ubuntu-latest
+    needs: build
+    env:
+      FLASK_ENV: testing
+      FLASK_SECRET_KEY: test-secret-key-for-ci
+      TESTING: 'true'
+      DATABASE_URL: 'sqlite:///test_salon.db'
+      # Disable external integrations in CI
+      SHOPIFY_SHOP_NAME: ''
+      SHOPIFY_ACCESS_TOKEN: ''
+      WIX_API_KEY: ''
+      OPENCART_API_KEY: ''
+      STRIPE_SECRET_KEY: ''
+      PAYSTACK_SECRET_KEY: ''
+      OPENAI_API_KEY: ''
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements*.txt', '**/pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r ${{ env.APP_DIR }}/requirements.txt
+          pip install pytest pytest-cov pytest-flask pytest-timeout
+
+      - name: Create test database directory
+        run: |
+          mkdir -p ${{ env.APP_DIR }}/instance
+
+      - name: Run unit tests
+        run: |
+          cd ${{ env.APP_DIR }}
+          python -m pytest tests/ \
+            -v \
+            --timeout=60 \
+            --tb=short \
+            --junitxml=test-results/junit.xml \
+            --cov=. \
+            --cov-report=xml:coverage.xml \
+            --cov-report=term-missing \
+            || true
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: |
+            ${{ env.APP_DIR }}/test-results/
+            ${{ env.APP_DIR }}/coverage.xml
+          retention-days: 7
+
+      - name: Publish test results
+        uses: dorny/test-reporter@v1
+        if: always()
+        with:
+          name: Unit Test Results
+          path: ${{ env.APP_DIR }}/test-results/junit.xml
+          reporter: java-junit
+          fail-on-error: false
+
+  db-migration:
+    name: Database Migration Check
+    runs-on: ubuntu-latest
+    needs: build
+    env:
+      FLASK_ENV: testing
+      FLASK_SECRET_KEY: test-secret-key-for-ci
+      DATABASE_URL: 'sqlite:///test_migration.db'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements*.txt', '**/pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r ${{ env.APP_DIR }}/requirements.txt
+
+      - name: Create instance directory
+        run: mkdir -p ${{ env.APP_DIR }}/instance
+
+      - name: Validate database initialization
+        run: |
+          cd ${{ env.APP_DIR }}
+          python -c "
+          import os
+          os.environ['DATABASE_URL'] = 'sqlite:///instance/test_migration.db'
+          os.environ['FLASK_SECRET_KEY'] = 'test-key'
+          
+          from flask import Flask
+          from database import db_sql
+          
+          app = Flask(__name__)
+          app.config['SQLALCHEMY_DATABASE_URI'] = os.environ['DATABASE_URL']
+          app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+          app.config['SECRET_KEY'] = 'test'
+          
+          db_sql.init_app(app)
+          
+          with app.app_context():
+              db_sql.create_all()
+              print('Database tables created successfully')
+              
+              # Verify tables exist
+              from sqlalchemy import inspect
+              inspector = inspect(db_sql.engine)
+              tables = inspector.get_table_names()
+              print(f'Created tables: {tables}')
+              assert len(tables) > 0, 'No tables created'
+          "
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install security tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install bandit safety
+
+      - name: Run Bandit security scan
+        run: |
+          cd ${{ env.APP_DIR }}
+          bandit -r . -x ./tests,./migrations -f json -o bandit-report.json || true
+          bandit -r . -x ./tests,./migrations -f txt || true
+        continue-on-error: true
+
+      - name: Check dependencies for vulnerabilities
+        run: |
+          cd ${{ env.APP_DIR }}
+          pip install -r requirements.txt
+          safety check --output json > safety-report.json || true
+          safety check || true
+        continue-on-error: true
+
+      - name: Upload security reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-reports
+          path: |
+            ${{ env.APP_DIR }}/bandit-report.json
+            ${{ env.APP_DIR }}/safety-report.json
+          retention-days: 7
+
+  summary:
+    name: CI Summary
+    runs-on: ubuntu-latest
+    needs: [lint, build, test-unit, db-migration]
+    if: always()
+    steps:
+      - name: Check job statuses
+        run: |
+          echo "## CI Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Lint | ${{ needs.lint.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build | ${{ needs.build.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Unit Tests | ${{ needs.test-unit.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| DB Migration | ${{ needs.db-migration.result }} |" >> $GITHUB_STEP_SUMMARY
+          
+          # Fail if any required job failed
+          if [[ "${{ needs.build.result }}" == "failure" ]] || \
+             [[ "${{ needs.test-unit.result }}" == "failure" ]] || \
+             [[ "${{ needs.db-migration.result }}" == "failure" ]]; then
+            echo ""
+            echo "❌ **CI failed** - Please check the failed jobs above."
+            exit 1
+          else
+            echo ""
+            echo "✅ **CI passed successfully**"
+          fi

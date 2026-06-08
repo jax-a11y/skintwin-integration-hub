@@ -47,3 +47,21 @@ config.json
 # OS
 .DS_Store
 Thumbs.db
+
+# Test artifacts
+test-results/
+!test-results/.gitkeep
+.pytest_cache/
+htmlcov/
+coverage.xml
+*.cover
+.coverage
+.coverage.*
+junit.xml
+report.html
+
+# Playwright
+playwright-report/
+test-results/traces/
+test-results/screenshots/
+test-results/videos/
