@@ -616,7 +616,11 @@ def create_gateway_blueprint(gateway: IntegrationGateway):
         
         try:
             results = gateway.sync_appointments(platforms, since)
-        except TypeError:
+        except TypeError as exc:
+            logger.warning(
+                "sync_appointments fallback without 'since' due to gateway signature mismatch: %s",
+                exc
+            )
             results = gateway.sync_appointments(platforms)
         
         if isinstance(results, dict):
@@ -635,7 +639,11 @@ def create_gateway_blueprint(gateway: IntegrationGateway):
         
         try:
             results = gateway.sync_clients(platforms, since)
-        except TypeError:
+        except TypeError as exc:
+            logger.warning(
+                "sync_clients fallback without 'since' due to gateway signature mismatch: %s",
+                exc
+            )
             results = gateway.sync_clients(platforms)
         
         if isinstance(results, dict):
@@ -665,14 +673,15 @@ def create_gateway_blueprint(gateway: IntegrationGateway):
     def create_company():
         """Create a B2B company."""
         if not hasattr(gateway, "create_b2b_company"):
-            return jsonify({"error": "B2B company creation is not supported"}), 404
+            return jsonify({"error": "B2B company creation is not supported"}), 501
 
         data = request.get_json() or {}
-        if not data.get('name'):
+        company_name = data.get('name')
+        if not company_name:
             return jsonify({"error": "Company name is required"}), 400
 
         result = gateway.create_b2b_company(
-            name=data['name'],
+            name=company_name,
             external_id=data.get('external_id'),
             note=data.get('note')
         )
