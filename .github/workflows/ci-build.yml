@@ -219,11 +219,12 @@ jobs:
           cd ${{ env.APP_DIR }}
           python -c "
           import os
-          os.environ['DATABASE_URL'] = 'sqlite:///instance/test_migration.db'
+          os.environ['DATABASE_URL'] = 'sqlite:///test_migration.db'
           os.environ['FLASK_SECRET_KEY'] = 'test-key'
           
           from flask import Flask
           from database import db_sql
+          from database_models import User
           
           app = Flask(__name__)
           app.config['SQLALCHEMY_DATABASE_URI'] = os.environ['DATABASE_URL']
