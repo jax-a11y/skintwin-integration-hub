@@ -4,6 +4,7 @@ Central orchestration layer for all platform integrations
 """
 
 import logging
+import inspect
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Type
 
@@ -593,6 +594,19 @@ def create_gateway_blueprint(gateway: IntegrationGateway):
             else:
                 serialized[key] = _serialize_item(value)
         return serialized
+
+    def _supports_since_parameter(method) -> bool:
+        try:
+            signature = inspect.signature(method)
+        except (TypeError, ValueError):
+            return False
+
+        for parameter in signature.parameters.values():
+            if parameter.kind == inspect.Parameter.VAR_POSITIONAL:
+                return True
+            if parameter.name == "since":
+                return True
+        return False
     
     @bp.route('/health', methods=['GET'])
     def health_check():
@@ -614,13 +628,13 @@ def create_gateway_blueprint(gateway: IntegrationGateway):
         if since:
             since = datetime.fromisoformat(since)
         
-        try:
+        if since and _supports_since_parameter(gateway.sync_appointments):
             results = gateway.sync_appointments(platforms, since)
-        except TypeError as exc:
-            logger.warning(
-                "sync_appointments fallback without 'since' due to gateway signature mismatch: %s",
-                exc
-            )
+        else:
+            if since:
+                logger.warning(
+                    "Gateway does not support since parameter for sync_appointments, retrying without it"
+                )
             results = gateway.sync_appointments(platforms)
         
         if isinstance(results, dict):
@@ -637,13 +651,13 @@ def create_gateway_blueprint(gateway: IntegrationGateway):
         if since:
             since = datetime.fromisoformat(since)
         
-        try:
+        if since and _supports_since_parameter(gateway.sync_clients):
             results = gateway.sync_clients(platforms, since)
-        except TypeError as exc:
-            logger.warning(
-                "sync_clients fallback without 'since' due to gateway signature mismatch: %s",
-                exc
-            )
+        else:
+            if since:
+                logger.warning(
+                    "Gateway does not support since parameter for sync_clients, retrying without it"
+                )
             results = gateway.sync_clients(platforms)
         
         if isinstance(results, dict):
@@ -666,7 +680,7 @@ def create_gateway_blueprint(gateway: IntegrationGateway):
     def get_companies():
         """Get B2B companies."""
         if not hasattr(gateway, "get_b2b_companies"):
-            return jsonify([])
+            return jsonify({"error": "B2B company listing is not supported"}), 501
         return jsonify(gateway.get_b2b_companies())
     
     @bp.route('/b2b/companies', methods=['POST'])
