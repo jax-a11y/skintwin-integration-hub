@@ -87,7 +87,7 @@ jobs:
           cd ${{ env.APP_DIR }}
           python -c "
           import os
-          os.environ['DATABASE_URL'] = 'sqlite:///instance/e2e_test.db'
+          os.environ['DATABASE_URL'] = 'sqlite:///e2e_test.db'
           os.environ['FLASK_SECRET_KEY'] = 'e2e-test-key'
           
           from flask import Flask
@@ -125,14 +125,14 @@ jobs:
       - name: Start Flask app
         run: |
           cd ${{ env.APP_DIR }}
-          export DATABASE_URL='sqlite:///instance/e2e_test.db'
+          export DATABASE_URL='sqlite:///e2e_test.db'
           export FLASK_SECRET_KEY='e2e-test-key'
           export FLASK_ENV='testing'
           python -c "
           import os
           import sys
           sys.path.insert(0, '.')
-          os.environ['DATABASE_URL'] = 'sqlite:///instance/e2e_test.db'
+          os.environ['DATABASE_URL'] = 'sqlite:///e2e_test.db'
           os.environ['FLASK_SECRET_KEY'] = 'e2e-test-key'
           
           # Start app in background
@@ -144,7 +144,7 @@ jobs:
           # Start app in background using gunicorn-style approach
           nohup python -c "
           import os
-          os.environ['DATABASE_URL'] = 'sqlite:///instance/e2e_test.db'
+          os.environ['DATABASE_URL'] = 'sqlite:///e2e_test.db'
           os.environ['FLASK_SECRET_KEY'] = 'e2e-test-key'
           from app import app
           app.config['WTF_CSRF_ENABLED'] = False

@@ -4,6 +4,7 @@ Central orchestration layer for all platform integrations
 """
 
 import logging
+import inspect
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Type
 
@@ -579,6 +580,33 @@ def create_gateway_blueprint(gateway: IntegrationGateway):
     from flask import Blueprint, request, jsonify
     
     bp = Blueprint('integration_gateway', __name__, url_prefix='/api/integrations')
+
+    def _serialize_item(item):
+        if hasattr(item, "to_dict") and callable(item.to_dict):
+            return item.to_dict()
+        return item
+
+    def _serialize_result_map(results: Dict[str, Any]) -> Dict[str, Any]:
+        serialized = {}
+        for key, value in results.items():
+            if isinstance(value, (list, tuple)):
+                serialized[key] = [_serialize_item(item) for item in value]
+            else:
+                serialized[key] = _serialize_item(value)
+        return serialized
+
+    def _supports_since_parameter(method) -> bool:
+        try:
+            signature = inspect.signature(method)
+        except (TypeError, ValueError):
+            return False
+
+        for parameter in signature.parameters.values():
+            if parameter.kind == inspect.Parameter.VAR_POSITIONAL:
+                return True
+            if parameter.name == "since":
+                return True
+        return False
     
     @bp.route('/health', methods=['GET'])
     def health_check():
@@ -600,14 +628,18 @@ def create_gateway_blueprint(gateway: IntegrationGateway):
         if since:
             since = datetime.fromisoformat(since)
         
-        results = gateway.sync_appointments(platforms, since)
+        if since and _supports_since_parameter(gateway.sync_appointments):
+            results = gateway.sync_appointments(platforms, since)
+        else:
+            if since:
+                logger.warning(
+                    "Gateway does not support since parameter for sync_appointments, retrying without it"
+                )
+            results = gateway.sync_appointments(platforms)
         
-        # Convert to serializable format
-        serialized = {}
-        for platform, appointments in results.items():
-            serialized[platform] = [a.to_dict() for a in appointments]
-        
-        return jsonify(serialized)
+        if isinstance(results, dict):
+            return jsonify(_serialize_result_map(results))
+        return jsonify(_serialize_item(results))
     
     @bp.route('/clients/sync', methods=['POST'])
     def sync_clients():
@@ -619,14 +651,18 @@ def create_gateway_blueprint(gateway: IntegrationGateway):
         if since:
             since = datetime.fromisoformat(since)
         
-        results = gateway.sync_clients(platforms, since)
+        if since and _supports_since_parameter(gateway.sync_clients):
+            results = gateway.sync_clients(platforms, since)
+        else:
+            if since:
+                logger.warning(
+                    "Gateway does not support since parameter for sync_clients, retrying without it"
+                )
+            results = gateway.sync_clients(platforms)
         
-        # Convert to serializable format
-        serialized = {}
-        for platform, clients in results.items():
-            serialized[platform] = [c.to_dict() for c in clients]
-        
-        return jsonify(serialized)
+        if isinstance(results, dict):
+            return jsonify(_serialize_result_map(results))
+        return jsonify(_serialize_item(results))
     
     @bp.route('/products/sync', methods=['POST'])
     def sync_products():
@@ -636,24 +672,30 @@ def create_gateway_blueprint(gateway: IntegrationGateway):
         
         results = gateway.sync_products(platforms)
         
-        # Convert to serializable format
-        serialized = {}
-        for platform, products in results.items():
-            serialized[platform] = [p.to_dict() for p in products]
-        
-        return jsonify(serialized)
+        if isinstance(results, dict):
+            return jsonify(_serialize_result_map(results))
+        return jsonify(_serialize_item(results))
     
     @bp.route('/b2b/companies', methods=['GET'])
     def get_companies():
         """Get B2B companies."""
+        if not hasattr(gateway, "get_b2b_companies"):
+            return jsonify({"error": "B2B company listing is not supported"}), 501
         return jsonify(gateway.get_b2b_companies())
     
     @bp.route('/b2b/companies', methods=['POST'])
     def create_company():
         """Create a B2B company."""
-        data = request.get_json()
+        if not hasattr(gateway, "create_b2b_company"):
+            return jsonify({"error": "B2B company creation is not supported"}), 501
+
+        data = request.get_json() or {}
+        company_name = data.get('name')
+        if not company_name:
+            return jsonify({"error": "Company name is required"}), 400
+
         result = gateway.create_b2b_company(
-            name=data['name'],
+            name=company_name,
             external_id=data.get('external_id'),
             note=data.get('note')
         )
