@@ -126,4 +126,8 @@ Contributions are welcome! Please feel free to submit a pull request or open an 
 ## License
 
 This project is licensed under the MIT License. See the `LICENSE` file for more details.
+
+## Ecosystem
+
+This repository is part of the [SkinTwin-AI ecosystem](https://github.com/jax-a11y/skintwin-ecosystem-design) (layer: **integration**, role: **integration-gateway**), where it provides the unified `integration-api` gateway. See [ECOSYSTEM.md](./ECOSYSTEM.md) for its contracts, events, and position in the ecosystem.
 '''
